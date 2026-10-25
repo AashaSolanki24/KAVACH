@@ -1,0 +1,15 @@
+
+{
+  "name": "kavach-monorepo",
+  "private": true,
+  "scripts": {
+    "start:frontend": "npm --prefix frontend run dev",
+    "build:frontend": "npm --prefix frontend run build",
+    "install:all": "npm run install:frontend && npm run install:backend && npm run install:dashboard",
+    "install:frontend": "npm install --prefix frontend",
+    "install:backend": "npm install --prefix backend",
+    "install:dashboard": "npm install --prefix police-dashboard",
+    "start:backend": "npm --prefix backend start",
+    "start:dashboard": "npm --prefix police-dashboard run dev"
+  }
+}

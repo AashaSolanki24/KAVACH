@@ -1,0 +1,104 @@
+import av
+import numpy as np
+import os
+
+class ToneClassifier:
+    def __init__(self):
+        pass
+
+    def classify_voice_tone(self, file_path: str, original_filename: str, distress_flagged: bool) -> dict:
+        """
+        Analyzes physical voice tone metrics (pitch, loudness/RMS, and variations).
+        Detects if the user is shouting (high RMS/amplitude) or speaking normally.
+        
+        Returns a dictionary:
+        {
+            "measured": bool,         # Flag indicating if acoustic measurement succeeded
+            "confidence": float|None, # Confidence score (0.0 to 100.0) or None if measurement failed
+            "rms": float|None,        # Raw calculated RMS amplitude or None
+            "status": str             # "OK" or "measurement_failed"
+        }
+        """
+        rms_val = 0.0
+        try:
+            if os.path.exists(file_path):
+                container = av.open(file_path)
+                audio_streams = [s for s in container.streams if s.type == 'audio']
+                if audio_streams:
+                    stream = audio_streams[0]
+                    # Resample to s16 (16-bit integer) mono to measure amplitude consistently
+                    resampler = av.AudioResampler(format='s16', layout='mono')
+                    amplitudes = []
+                    
+                    for frame in container.decode(stream):
+                        resampled_frames = resampler.resample(frame)
+                        for r_frame in resampled_frames:
+                            data = r_frame.to_ndarray()
+                            if data.size > 0:
+                                amplitudes.append(data.flatten())
+                                
+                    if amplitudes:
+                        all_samples = np.concatenate(amplitudes)
+                        if len(all_samples) > 0:
+                            # RMS of the PCM 16-bit signal (values range -32768 to 32767)
+                            rms_val = np.sqrt(np.mean(all_samples.astype(np.float32) ** 2))
+                            print(f"[TONE CLASSIFIER] Calculated Audio RMS Amplitude: {rms_val:.2f}")
+                        else:
+                            rms_val = None
+                    else:
+                        rms_val = None
+                else:
+                    rms_val = None
+            else:
+                rms_val = None
+        except Exception as e:
+            print(f"[TONE CLASSIFIER] Failed to calculate real audio RMS: {e}")
+            rms_val = None
+
+        # When audio cannot be measured: return no score and a flag saying the measurement failed.
+        # DO NOT guess a random number (85-98) and DO NOT guess zero!
+        if rms_val is None:
+            print("[TONE CLASSIFIER] Acoustic measurement failed. Returning no score and measured=False.")
+            return {
+                "measured": False,
+                "confidence": None,
+                "rms": None,
+                "status": "measurement_failed"
+            }
+
+        # Pure digital silence: measured successfully, volume is 0
+        if rms_val == 0.0:
+            return {
+                "measured": True,
+                "confidence": 0.0,
+                "rms": 0.0,
+                "status": "OK"
+            }
+
+        # Real audio amplitude matching:
+        # Normal conversation volume typically sits below 1500 RMS.
+        # Shouting or screaming spikes the amplitude significantly (typically > 1800 RMS).
+        is_shouting = rms_val > 1800.0
+        
+        if is_shouting:
+            # Map RMS to high distress tone confidence range (75% to 99%)
+            clamped_rms = min(6000.0, max(1800.0, rms_val))
+            tone_confidence = 75.0 + ((clamped_rms - 1800.0) / (6000.0 - 1800.0)) * 24.0
+            print(f"[TONE CLASSIFIER] Shouting/High volume detected. RMS={rms_val:.2f} -> Confidence={tone_confidence:.2f}%")
+        else:
+            # Map RMS to normal/low voice tone confidence range (10% to 45%)
+            clamped_rms = min(1800.0, max(100.0, rms_val))
+            tone_confidence = 10.0 + ((clamped_rms - 100.0) / (1800.0 - 100.0)) * 35.0
+            print(f"[TONE CLASSIFIER] Normal voice level. RMS={rms_val:.2f} -> Confidence={tone_confidence:.2f}%")
+
+        # Boost tone confidence if whisper flagged linguistic distress
+        if distress_flagged:
+            tone_confidence = max(85.0, tone_confidence)
+            print(f"[TONE CLASSIFIER] Boosting confidence to {tone_confidence:.2f}% due to distress keywords.")
+
+        return {
+            "measured": True,
+            "confidence": round(tone_confidence, 2),
+            "rms": round(rms_val, 2),
+            "status": "OK"
+        }
